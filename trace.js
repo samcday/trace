@@ -1,9 +1,14 @@
-
+var tracing = require("tracing");
 var chain = require('stack-chain');
 
 // Contains the call site objects of all the prevouse ticks leading
 // up to this one
-var callSitesForPreviuseTicks = null;
+var callSitesForPreviuseTicks = null,
+  mark = false;
+
+exports.mark = function(id) {
+  mark = id;
+};
 
 // add currentTrace to the callSite array
 chain.extend.attach(function (error, frames) {
@@ -12,13 +17,43 @@ chain.extend.attach(function (error, frames) {
   return frames;
 });
 
+chain.format.replace(function(error, frames) {
+  var lines = [];
+
+  lines.push(error.toString());
+
+  var currEvent = undefined;
+  for (var i = 0; i < frames.length; i++) {
+    if (frames[i].$$PREVEVENT$$ != currEvent) {
+      lines.push("Previous event:");
+      currEvent = frames[i].$$PREVEVENT$$;
+    }
+    lines.push("    at " + frames[i].toString());
+  }
+
+  return lines.join("\n");
+});
+
 // Setup an async listener with the handlers listed below
-process.addAsyncListener({
+tracing.addAsyncListener({
   'create': asyncFunctionInitialized,
   'before': asyncCallbackBefore,
   'error': asyncCallbackError,
   'after': asyncCallbackAfter
 });
+
+function MarkerFrame(id) {
+  this.id = id;
+  this.isMarker = true;
+}
+
+MarkerFrame.prototype.toString = function() {
+  return "--" + this.id + "--";
+};
+
+MarkerFrame.prototype.getFunctionName = function() {
+  return "";
+};
 
 function asyncFunctionInitialized() {
   // Capture the callSites for this tick
@@ -26,6 +61,17 @@ function asyncFunctionInitialized() {
   // .slice(2) removes first this file and then process.runAsyncQueue from the
   // callSites array. Both of those only exists because of this module.
   var trace = err.callSite.slice(2);
+
+  if (mark) {
+    var fakeFrame = new MarkerFrame(mark);
+    mark = false;
+    callSitesForPreviuseTicks && callSitesForPreviuseTicks.unshift(fakeFrame);
+  }
+
+  trace.__num = (callSitesForPreviuseTicks ? callSitesForPreviuseTicks.__num + 1 : 0);
+  trace.forEach(function(callSite) {
+    callSite.$$PREVEVENT$$ = trace.__num;
+  });
 
   // Add all the callSites from previuse ticks
   trace.push.apply(trace, callSitesForPreviuseTicks);
